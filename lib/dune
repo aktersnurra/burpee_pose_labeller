@@ -1,0 +1,5 @@
+(library
+ (name burpee_pose_labeller)
+ (libraries core)
+ (preprocess
+  (pps ppx_jane)))
