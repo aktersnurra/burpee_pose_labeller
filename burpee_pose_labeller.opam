@@ -5,9 +5,8 @@ homepage: "https://github.com/aktersnurra/burpee_pose_labeller"
 bug-reports: "https://github.com/aktersnurra/burpee_pose_labeller/issues"
 depends: [
   "ocaml" {>= "5.1.0"}
-  "dune" {>= "3.17" & >= "3.17"}
+  "dune" {>= "3.14" & >= "3.14"}
   "bonsai"
-  "bonsai_web"
   "core"
   "ppx_jane"
   "js_of_ocaml"

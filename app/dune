@@ -1,6 +1,6 @@
 (executable
  (modes byte exe)
  (name main)
- (libraries bonsai_web core burpee_pose_labeller)
+ (libraries bonsai.web core burpee_pose_labeller)
  (preprocess
   (pps bonsai.ppx_bonsai ppx_jane)))

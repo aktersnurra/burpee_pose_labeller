@@ -1,5 +1,30 @@
 open! Core
 
+module Error : sig
+  type t =
+    | Invalid_interval of
+        { start_ms : int
+        ; end_ms : int
+        }
+    | Empty_label
+    | No_interval_in_progress
+  [@@deriving compare, equal, sexp]
+end
+
+module Capture_id : sig
+  type t [@@deriving compare, equal, sexp]
+
+  val of_int : int -> t
+  val to_int : t -> int
+end
+
+module Label_id : sig
+  type t [@@deriving compare, equal, sexp]
+
+  val of_int : int -> t
+  val to_int : t -> int
+end
+
 module Segment : sig
   type t =
     | Warmup
@@ -14,4 +39,58 @@ module Label_type : sig
     | Quality
     | Tag
   [@@deriving compare, equal, sexp]
+end
+
+module Interval : sig
+  type t [@@deriving compare, equal, sexp]
+
+  val create : start_ms:int -> end_ms:int -> (t, Error.t) result
+  val start_ms : t -> int
+  val end_ms : t -> int
+end
+
+module Label : sig
+  type t [@@deriving compare, equal, sexp]
+
+  val create
+    :  id:Label_id.t
+    -> capture_id:Capture_id.t
+    -> segment:Segment.t
+    -> interval:Interval.t
+    -> label_type:Label_type.t
+    -> label:string
+    -> (t, Error.t) result
+
+  val id : t -> Label_id.t
+  val capture_id : t -> Capture_id.t
+  val segment : t -> Segment.t
+  val interval : t -> Interval.t
+  val label_type : t -> Label_type.t
+  val label : t -> string
+end
+
+type action =
+  | Select_capture of Capture_id.t
+  | Select_segment of Segment.t
+  | Seek of int
+  | Start_interval of int
+  | End_interval of int
+  | Add_label of Label.t
+  | Edit_label of Label.t
+  | Delete_label of Label_id.t
+  | Mark_saved
+[@@deriving sexp]
+
+module Model : sig
+  type t [@@deriving sexp]
+
+  val empty : t
+  val apply : t -> action -> (t, Error.t) result
+  val apply_exn : t -> action -> t
+  val selected_capture : t -> Capture_id.t option
+  val selected_segment : t -> Segment.t
+  val current_time_ms : t -> int
+  val draft_interval : t -> Interval.t option
+  val labels : t -> Label.t list
+  val has_unsaved_changes : t -> bool
 end

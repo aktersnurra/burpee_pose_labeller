@@ -1,4 +1,4 @@
-(lang dune 3.17)
+(lang dune 3.14)
 (name burpee_pose_labeller)
 (generate_opam_files true)
 (source
@@ -8,9 +8,8 @@
  (synopsis "OCaml/Bonsai pose trace labelling tool")
  (depends
   (ocaml (>= 5.1.0))
-  (dune (>= 3.17))
+  (dune (>= 3.14))
   bonsai
-  bonsai_web
   core
   ppx_jane
   js_of_ocaml
