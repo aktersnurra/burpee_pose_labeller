@@ -11,6 +11,7 @@
   (dune (>= 3.14))
   bonsai
   core
+  yojson
   ppx_jane
   js_of_ocaml
   js_of_ocaml-ppx))

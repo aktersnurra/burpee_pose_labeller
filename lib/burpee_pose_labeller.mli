@@ -8,6 +8,7 @@ module Error : sig
         }
     | Empty_label
     | No_interval_in_progress
+    | Invalid_manifest of string
   [@@deriving compare, equal, sexp]
 end
 
@@ -39,6 +40,27 @@ module Label_type : sig
     | Quality
     | Tag
   [@@deriving compare, equal, sexp]
+end
+
+module Capture_metadata : sig
+  type t [@@deriving compare, equal, sexp]
+
+  val id : t -> Capture_id.t
+  val recorded_at : t -> string option
+  val session_name : t -> string option
+  val has_segment : t -> Segment.t -> bool
+  val sample_count : t -> Segment.t -> int option
+  val model_name : t -> string option
+  val model_version : t -> string option
+  val labels_present : t -> bool
+  val analysis_present : t -> bool
+end
+
+module Bundle_manifest : sig
+  type t [@@deriving compare, equal, sexp]
+
+  val parse_string : string -> (t, Error.t) result
+  val captures : t -> Capture_metadata.t list
 end
 
 module Interval : sig

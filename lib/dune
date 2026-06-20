@@ -1,6 +1,6 @@
 (library
  (name burpee_pose_labeller)
  (public_name burpee_pose_labeller)
- (libraries core)
+ (libraries core yojson)
  (preprocess
   (pps ppx_jane)))

@@ -8,6 +8,7 @@ module Error = struct
         }
     | Empty_label
     | No_interval_in_progress
+    | Invalid_manifest of string
   [@@deriving compare, equal, sexp]
 end
 
@@ -47,6 +48,127 @@ module Label_type = struct
     | Quality
     | Tag
   [@@deriving compare, equal, sexp]
+end
+
+module Capture_metadata = struct
+  type t =
+    { id : Capture_id.t
+    ; recorded_at : string option
+    ; session_name : string option
+    ; has_warmup : bool
+    ; has_main : bool
+    ; warmup_sample_count : int option
+    ; main_sample_count : int option
+    ; model_name : string option
+    ; model_version : string option
+    ; labels_present : bool
+    ; analysis_present : bool
+    }
+  [@@deriving compare, equal, sexp]
+
+  let id t = t.id
+  let recorded_at t = t.recorded_at
+  let session_name t = t.session_name
+
+  let has_segment t = function
+    | Segment.Warmup -> t.has_warmup
+    | Main -> t.has_main
+  ;;
+
+  let sample_count t = function
+    | Segment.Warmup -> t.warmup_sample_count
+    | Main -> t.main_sample_count
+  ;;
+
+  let model_name t = t.model_name
+  let model_version t = t.model_version
+  let labels_present t = t.labels_present
+  let analysis_present t = t.analysis_present
+end
+
+module Bundle_manifest = struct
+  type t = { captures : Capture_metadata.t list } [@@deriving compare, equal, sexp]
+
+  let invalid message = Error (Error.Invalid_manifest message)
+
+  let field json name =
+    match json with
+    | `Assoc fields -> List.Assoc.find fields name ~equal:String.equal
+    | _ -> None
+  ;;
+
+  let required_int json name =
+    match field json name with
+    | Some (`Int value) -> Ok value
+    | Some _ -> invalid [%string "field %{name} must be an integer"]
+    | None -> invalid [%string "missing field %{name}"]
+  ;;
+
+  let optional_int json name =
+    match field json name with
+    | Some (`Int value) -> Ok (Some value)
+    | Some `Null | None -> Ok None
+    | Some _ -> invalid [%string "field %{name} must be an integer"]
+  ;;
+
+  let optional_string json name =
+    match field json name with
+    | Some (`String value) -> Ok (Some value)
+    | Some `Null | None -> Ok None
+    | Some _ -> invalid [%string "field %{name} must be a string"]
+  ;;
+
+  let optional_bool json name =
+    match field json name with
+    | Some (`Bool value) -> Ok value
+    | Some `Null | None -> Ok false
+    | Some _ -> invalid [%string "field %{name} must be a boolean"]
+  ;;
+
+  let parse_capture json =
+    let open Result.Let_syntax in
+    let%bind id = required_int json "capture_run_id" in
+    let%bind recorded_at = optional_string json "recorded_at" in
+    let%bind session_name = optional_string json "session_name" in
+    let%bind has_warmup = optional_bool json "has_warmup" in
+    let%bind has_main = optional_bool json "has_main" in
+    let%bind warmup_sample_count = optional_int json "warmup_sample_count" in
+    let%bind main_sample_count = optional_int json "main_sample_count" in
+    let%bind model_name = optional_string json "model_name" in
+    let%bind model_version = optional_string json "model_version" in
+    let%bind labels_present = optional_bool json "labels_present" in
+    let%map analysis_present = optional_bool json "analysis_present" in
+    { Capture_metadata.id = Capture_id.of_int id
+    ; recorded_at
+    ; session_name
+    ; has_warmup
+    ; has_main
+    ; warmup_sample_count
+    ; main_sample_count
+    ; model_name
+    ; model_version
+    ; labels_present
+    ; analysis_present
+    }
+  ;;
+
+  let parse_json json =
+    match field json "captures" with
+    | Some (`List captures) ->
+      let open Result.Let_syntax in
+      let%map captures = Result.all (List.map captures ~f:parse_capture) in
+      { captures }
+    | Some _ -> invalid "field captures must be an array"
+    | None -> invalid "missing field captures"
+  ;;
+
+  let parse_string string =
+    match Yojson.Safe.from_string string with
+    | json -> parse_json json
+    | exception Yojson.Json_error message -> invalid message
+  ;;
+
+  let captures t = t.captures
 end
 
 module Interval = struct
