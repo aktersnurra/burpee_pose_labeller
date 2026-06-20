@@ -288,6 +288,62 @@ let test_trace_load_json_file_reports_missing_file () =
     | _ -> raise_s [%message "expected Trace_file_error" (error : Error.t)])
 ;;
 
+let write_minimal_bundle ?(labels = Some sample_labels_json) dir =
+  let open Burpee_pose_labeller in
+  Out_channel.write_all (Filename.concat dir "manifest.json") ~data:sample_manifest_json;
+  let traces_dir = Filename.concat dir "traces" in
+  Core_unix.mkdir traces_dir;
+  Out_channel.write_all
+    (Bundle_paths.trace_json_file
+       ~bundle_dir:dir
+       ~capture_id:(Capture_id.of_int 42)
+       ~segment:Segment.Main)
+    ~data:sample_trace_json;
+  match labels with
+  | None -> ()
+  | Some labels ->
+    let labels_dir = Filename.concat dir "labels" in
+    Core_unix.mkdir labels_dir;
+    Out_channel.write_all
+      (Bundle_paths.labels_json_file ~bundle_dir:dir ~capture_id:(Capture_id.of_int 42))
+      ~data:labels
+;;
+
+let test_bundle_workspace_load_reads_capture_trace_and_labels () =
+  let open Burpee_pose_labeller in
+  with_temp_bundle_dir ~f:(fun dir ->
+    write_minimal_bundle dir;
+    let workspace =
+      require_ok
+        (Bundle_workspace.load
+           ~bundle_dir:dir
+           ~capture_id:(Capture_id.of_int 42)
+           ~segment:Segment.Main)
+    in
+    [%test_result: Capture_id.t]
+      (Capture_metadata.id (Bundle_workspace.capture workspace))
+      ~expect:(Capture_id.of_int 42);
+    [%test_result: Segment.t] (Bundle_workspace.segment workspace) ~expect:Segment.Main;
+    [%test_result: int]
+      (List.length (Trace.samples (Bundle_workspace.trace workspace)))
+      ~expect:2;
+    [%test_result: int] (List.length (Bundle_workspace.labels workspace)) ~expect:1)
+;;
+
+let test_bundle_workspace_load_uses_empty_labels_when_label_file_is_missing () =
+  let open Burpee_pose_labeller in
+  with_temp_bundle_dir ~f:(fun dir ->
+    write_minimal_bundle ~labels:None dir;
+    let workspace =
+      require_ok
+        (Bundle_workspace.load
+           ~bundle_dir:dir
+           ~capture_id:(Capture_id.of_int 42)
+           ~segment:Segment.Main)
+    in
+    [%test_result: int] (List.length (Bundle_workspace.labels workspace)) ~expect:0)
+;;
+
 let test_interval_requires_end_after_start () =
   let open Burpee_pose_labeller in
   let _ = require_ok (Interval.create ~start_ms:10 ~end_ms:20) in
@@ -374,6 +430,42 @@ let test_editing_a_label_replaces_the_matching_id_and_marks_the_model_dirty () =
   [%test_result: bool] (Model.has_unsaved_changes model) ~expect:true
 ;;
 
+let test_loading_manifest_updates_model_capture_index () =
+  let open Burpee_pose_labeller in
+  let manifest = require_ok (Bundle_manifest.parse_string sample_manifest_json) in
+  let model = Model.apply_exn Model.empty (Load_manifest manifest) in
+  let captures = Model.captures model in
+  [%test_result: int] (List.length captures) ~expect:1;
+  [%test_result: Capture_id.t]
+    (Capture_metadata.id (List.hd_exn captures))
+    ~expect:(Capture_id.of_int 42);
+  [%test_result: Capture_id.t option] (Model.selected_capture model) ~expect:None;
+  [%test_result: bool] (Model.has_unsaved_changes model) ~expect:false
+;;
+
+let test_loading_workspace_updates_model_for_ui_state () =
+  let open Burpee_pose_labeller in
+  with_temp_bundle_dir ~f:(fun dir ->
+    write_minimal_bundle dir;
+    let workspace =
+      require_ok
+        (Bundle_workspace.load
+           ~bundle_dir:dir
+           ~capture_id:(Capture_id.of_int 42)
+           ~segment:Segment.Main)
+    in
+    let model = Model.apply_exn Model.empty (Load_workspace workspace) in
+    [%test_result: Capture_id.t option]
+      (Model.selected_capture model)
+      ~expect:(Some (Capture_id.of_int 42));
+    [%test_result: Segment.t] (Model.selected_segment model) ~expect:Segment.Main;
+    [%test_result: int] (List.length (Model.labels model)) ~expect:1;
+    [%test_result: int option]
+      (Option.map (Model.loaded_trace model) ~f:(fun trace -> List.length (Trace.samples trace)))
+      ~expect:(Some 2);
+    [%test_result: bool] (Model.has_unsaved_changes model) ~expect:false)
+;;
+
 let test_marking_saved_clears_unsaved_changes () =
   let open Burpee_pose_labeller in
   let interval = require_ok (Interval.create ~start_ms:1_000 ~end_ms:2_500) in
@@ -407,10 +499,14 @@ let () =
   test_trace_parse_rejects_missing_keypoints ();
   test_trace_load_json_file_reads_trace_samples ();
   test_trace_load_json_file_reports_missing_file ();
+  test_bundle_workspace_load_reads_capture_trace_and_labels ();
+  test_bundle_workspace_load_uses_empty_labels_when_label_file_is_missing ();
   test_interval_requires_end_after_start ();
   test_ending_an_interval_stores_a_draft_interval ();
   test_adding_a_label_stores_it_and_marks_the_model_dirty ();
   test_deleting_a_label_removes_it_and_marks_the_model_dirty ();
   test_editing_a_label_replaces_the_matching_id_and_marks_the_model_dirty ();
+  test_loading_manifest_updates_model_capture_index ();
+  test_loading_workspace_updates_model_for_ui_state ();
   test_marking_saved_clears_unsaved_changes ()
 ;;

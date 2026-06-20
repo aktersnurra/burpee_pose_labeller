@@ -11,6 +11,7 @@ module Error = struct
     | Invalid_manifest of string
     | Invalid_labels of string
     | Invalid_trace of string
+    | Capture_not_found of int
     | Manifest_file_error of
         { path : string
         ; message : string
@@ -371,6 +372,11 @@ module Label_store = struct
   ;;
 end
 
+let is_missing_file_error message =
+  String.is_substring message ~substring:"No such file"
+  || String.is_substring message ~substring:"ENOENT"
+;;
+
 module Trace = struct
   module Keypoint = struct
     type t =
@@ -476,6 +482,50 @@ module Trace = struct
   let samples t = t.samples
 end
 
+module Bundle_workspace = struct
+  type t =
+    { capture : Capture_metadata.t
+    ; segment : Segment.t
+    ; trace : Trace.t
+    ; labels : Label.t list
+    }
+  [@@deriving compare, equal, sexp]
+
+  let find_capture manifest capture_id =
+    match
+      List.find (Bundle_manifest.captures manifest) ~f:(fun capture ->
+        Capture_id.equal (Capture_metadata.id capture) capture_id)
+    with
+    | Some capture -> Ok capture
+    | None -> Error (Error.Capture_not_found (Capture_id.to_int capture_id))
+  ;;
+
+  let load_labels_or_empty ~path =
+    match Label_store.load_json_file ~path with
+    | Ok labels -> Ok labels
+    | Error (Error.Label_file_error { message; _ }) when is_missing_file_error message -> Ok []
+    | Error error -> Error error
+  ;;
+
+  let load ~bundle_dir ~capture_id ~segment =
+    let open Result.Let_syntax in
+    let%bind manifest = Bundle_manifest.load ~bundle_dir in
+    let%bind capture = find_capture manifest capture_id in
+    let%bind trace =
+      Trace.load_json_file ~path:(Bundle_paths.trace_json_file ~bundle_dir ~capture_id ~segment)
+    in
+    let%map labels =
+      load_labels_or_empty ~path:(Bundle_paths.labels_json_file ~bundle_dir ~capture_id)
+    in
+    { capture; segment; trace; labels }
+  ;;
+
+  let capture t = t.capture
+  let segment t = t.segment
+  let trace t = t.trace
+  let labels t = t.labels
+end
+
 type action =
   | Select_capture of Capture_id.t
   | Select_segment of Segment.t
@@ -484,28 +534,34 @@ type action =
   | End_interval of int
   | Add_label of Label.t
   | Edit_label of Label.t
+  | Load_manifest of Bundle_manifest.t
+  | Load_workspace of Bundle_workspace.t
   | Delete_label of Label_id.t
   | Mark_saved
 [@@deriving sexp]
 
 module Model = struct
   type t =
-    { selected_capture : Capture_id.t option
+    { captures : Capture_metadata.t list
+    ; selected_capture : Capture_id.t option
     ; selected_segment : Segment.t
     ; current_time_ms : int
     ; interval_start_ms : int option
     ; draft_interval : Interval.t option
+    ; loaded_trace : Trace.t option
     ; labels : Label.t list
     ; has_unsaved_changes : bool
     }
   [@@deriving sexp]
 
   let empty =
-    { selected_capture = None
+    { captures = []
+    ; selected_capture = None
     ; selected_segment = Main
     ; current_time_ms = 0
     ; interval_start_ms = None
     ; draft_interval = None
+    ; loaded_trace = None
     ; labels = []
     ; has_unsaved_changes = false
     }
@@ -532,6 +588,19 @@ module Model = struct
               if Label_id.equal (Label.id label) (Label.id edited_label) then edited_label else label)
         ; has_unsaved_changes = true
         }
+    | Load_manifest manifest -> Ok { t with captures = Bundle_manifest.captures manifest }
+    | Load_workspace workspace ->
+      Ok
+        { captures = t.captures
+        ; selected_capture = Some (Capture_metadata.id (Bundle_workspace.capture workspace))
+        ; selected_segment = Bundle_workspace.segment workspace
+        ; current_time_ms = 0
+        ; interval_start_ms = None
+        ; draft_interval = None
+        ; loaded_trace = Some (Bundle_workspace.trace workspace)
+        ; labels = List.rev (Bundle_workspace.labels workspace)
+        ; has_unsaved_changes = false
+        }
     | Delete_label label_id ->
       Ok
         { t with
@@ -547,10 +616,12 @@ module Model = struct
     | Error error -> raise_s [%message "invalid model action" (error : Error.t)]
   ;;
 
+  let captures t = t.captures
   let selected_capture t = t.selected_capture
   let selected_segment t = t.selected_segment
   let current_time_ms t = t.current_time_ms
   let draft_interval t = t.draft_interval
+  let loaded_trace t = t.loaded_trace
   let labels t = List.rev t.labels
   let has_unsaved_changes t = t.has_unsaved_changes
 end

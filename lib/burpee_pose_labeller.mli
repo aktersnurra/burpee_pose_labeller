@@ -11,6 +11,7 @@ module Error : sig
     | Invalid_manifest of string
     | Invalid_labels of string
     | Invalid_trace of string
+    | Capture_not_found of int
     | Manifest_file_error of
         { path : string
         ; message : string
@@ -142,6 +143,21 @@ module Trace : sig
   val samples : t -> Sample.t list
 end
 
+module Bundle_workspace : sig
+  type t [@@deriving compare, equal, sexp]
+
+  val load
+    :  bundle_dir:string
+    -> capture_id:Capture_id.t
+    -> segment:Segment.t
+    -> (t, Error.t) result
+
+  val capture : t -> Capture_metadata.t
+  val segment : t -> Segment.t
+  val trace : t -> Trace.t
+  val labels : t -> Label.t list
+end
+
 type action =
   | Select_capture of Capture_id.t
   | Select_segment of Segment.t
@@ -150,6 +166,8 @@ type action =
   | End_interval of int
   | Add_label of Label.t
   | Edit_label of Label.t
+  | Load_manifest of Bundle_manifest.t
+  | Load_workspace of Bundle_workspace.t
   | Delete_label of Label_id.t
   | Mark_saved
 [@@deriving sexp]
@@ -160,10 +178,12 @@ module Model : sig
   val empty : t
   val apply : t -> action -> (t, Error.t) result
   val apply_exn : t -> action -> t
+  val captures : t -> Capture_metadata.t list
   val selected_capture : t -> Capture_id.t option
   val selected_segment : t -> Segment.t
   val current_time_ms : t -> int
   val draft_interval : t -> Interval.t option
+  val loaded_trace : t -> Trace.t option
   val labels : t -> Label.t list
   val has_unsaved_changes : t -> bool
 end
