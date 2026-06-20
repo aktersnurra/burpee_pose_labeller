@@ -64,11 +64,34 @@ let with_temp_bundle_dir ~f =
     ~finally:(fun () ->
       let manifest_path = Filename.concat dir "manifest.json" in
       let labels_dir = Filename.concat dir "labels" in
+      let traces_dir = Filename.concat dir "traces" in
       let label_path = Filename.concat labels_dir "capture-42-labels.json" in
+      let trace_path = Filename.concat traces_dir "capture-42-main.json" in
       if Sys_unix.file_exists_exn manifest_path then Core_unix.unlink manifest_path;
       if Sys_unix.file_exists_exn label_path then Core_unix.unlink label_path;
+      if Sys_unix.file_exists_exn trace_path then Core_unix.unlink trace_path;
       if Sys_unix.file_exists_exn labels_dir then Core_unix.rmdir labels_dir;
+      if Sys_unix.file_exists_exn traces_dir then Core_unix.rmdir traces_dir;
       Core_unix.rmdir dir)
+;;
+
+let test_bundle_paths_use_standard_bundle_layout () =
+  let open Burpee_pose_labeller in
+  [%test_result: string]
+    (Bundle_paths.trace_json_file
+       ~bundle_dir:"/bundle"
+       ~capture_id:(Capture_id.of_int 42)
+       ~segment:Segment.Main)
+    ~expect:"/bundle/traces/capture-42-main.json";
+  [%test_result: string]
+    (Bundle_paths.trace_json_file
+       ~bundle_dir:"/bundle"
+       ~capture_id:(Capture_id.of_int 42)
+       ~segment:Segment.Warmup)
+    ~expect:"/bundle/traces/capture-42-warmup.json";
+  [%test_result: string]
+    (Bundle_paths.labels_json_file ~bundle_dir:"/bundle" ~capture_id:(Capture_id.of_int 42))
+    ~expect:"/bundle/labels/capture-42-labels.json"
 ;;
 
 let test_manifest_parse_rejects_missing_captures () =
@@ -201,6 +224,70 @@ let test_label_store_load_json_file_reports_missing_file () =
     | _ -> raise_s [%message "expected Label_file_error" (error : Error.t)])
 ;;
 
+let sample_trace_json =
+  {|
+[
+  {
+    "time_ms": 0,
+    "keypoints": [
+      { "name": "left_shoulder", "x": 0.25, "y": 0.40, "score": 0.99 },
+      { "name": "right_shoulder", "x": 0.75, "y": 0.41 }
+    ]
+  },
+  {
+    "time_ms": 33,
+    "keypoints": [
+      { "name": "left_shoulder", "x": 0.26, "y": 0.42, "score": 0.97 }
+    ]
+  }
+]
+|}
+;;
+
+let test_trace_parse_reads_samples_and_keypoints () =
+  let open Burpee_pose_labeller in
+  let trace = require_ok (Trace.parse_string sample_trace_json) in
+  let samples = Trace.samples trace in
+  [%test_result: int] (List.length samples) ~expect:2;
+  let first_sample = List.hd_exn samples in
+  [%test_result: int] (Trace.Sample.time_ms first_sample) ~expect:0;
+  let keypoints = Trace.Sample.keypoints first_sample in
+  [%test_result: int] (List.length keypoints) ~expect:2;
+  let first_keypoint = List.hd_exn keypoints in
+  [%test_result: string] (Trace.Keypoint.name first_keypoint) ~expect:"left_shoulder";
+  [%test_result: float] (Trace.Keypoint.x first_keypoint) ~expect:0.25;
+  [%test_result: float] (Trace.Keypoint.y first_keypoint) ~expect:0.40;
+  [%test_result: float option] (Trace.Keypoint.score first_keypoint) ~expect:(Some 0.99)
+;;
+
+let test_trace_parse_rejects_missing_keypoints () =
+  let open Burpee_pose_labeller in
+  let error = require_error (Trace.parse_string {|[{"time_ms":0}]|}) in
+  match error with
+  | Error.Invalid_trace _ -> ()
+  | _ -> raise_s [%message "expected Invalid_trace" (error : Error.t)]
+;;
+
+let test_trace_load_json_file_reads_trace_samples () =
+  let open Burpee_pose_labeller in
+  with_temp_bundle_dir ~f:(fun dir ->
+    let traces_dir = Filename.concat dir "traces" in
+    Core_unix.mkdir traces_dir;
+    let path = Filename.concat traces_dir "capture-42-main.json" in
+    Out_channel.write_all path ~data:sample_trace_json;
+    let trace = require_ok (Trace.load_json_file ~path) in
+    [%test_result: int] (List.length (Trace.samples trace)) ~expect:2)
+;;
+
+let test_trace_load_json_file_reports_missing_file () =
+  let open Burpee_pose_labeller in
+  with_temp_bundle_dir ~f:(fun dir ->
+    let error = require_error (Trace.load_json_file ~path:(Filename.concat dir "missing-trace.json")) in
+    match error with
+    | Error.Trace_file_error _ -> ()
+    | _ -> raise_s [%message "expected Trace_file_error" (error : Error.t)])
+;;
+
 let test_interval_requires_end_after_start () =
   let open Burpee_pose_labeller in
   let _ = require_ok (Interval.create ~start_ms:10 ~end_ms:20) in
@@ -307,6 +394,7 @@ let test_marking_saved_clears_unsaved_changes () =
 
 let () =
   test_manifest_parse_exposes_capture_index_metadata ();
+  test_bundle_paths_use_standard_bundle_layout ();
   test_manifest_parse_rejects_missing_captures ();
   test_manifest_load_reads_manifest_json_from_bundle_dir ();
   test_manifest_load_reports_missing_manifest_file ();
@@ -315,6 +403,10 @@ let () =
   test_label_store_parse_rejects_unknown_label_type ();
   test_label_store_save_and_load_json_file_round_trips_labels ();
   test_label_store_load_json_file_reports_missing_file ();
+  test_trace_parse_reads_samples_and_keypoints ();
+  test_trace_parse_rejects_missing_keypoints ();
+  test_trace_load_json_file_reads_trace_samples ();
+  test_trace_load_json_file_reports_missing_file ();
   test_interval_requires_end_after_start ();
   test_ending_an_interval_stores_a_draft_interval ();
   test_adding_a_label_stores_it_and_marks_the_model_dirty ();

@@ -10,11 +10,16 @@ module Error : sig
     | No_interval_in_progress
     | Invalid_manifest of string
     | Invalid_labels of string
+    | Invalid_trace of string
     | Manifest_file_error of
         { path : string
         ; message : string
         }
     | Label_file_error of
+        { path : string
+        ; message : string
+        }
+    | Trace_file_error of
         { path : string
         ; message : string
         }
@@ -73,6 +78,11 @@ module Bundle_manifest : sig
   val captures : t -> Capture_metadata.t list
 end
 
+module Bundle_paths : sig
+  val trace_json_file : bundle_dir:string -> capture_id:Capture_id.t -> segment:Segment.t -> string
+  val labels_json_file : bundle_dir:string -> capture_id:Capture_id.t -> string
+end
+
 module Interval : sig
   type t [@@deriving compare, equal, sexp]
 
@@ -106,6 +116,30 @@ module Label_store : sig
   val to_string : Label.t list -> string
   val load_json_file : path:string -> (Label.t list, Error.t) result
   val save_json_file : path:string -> Label.t list -> (unit, Error.t) result
+end
+
+module Trace : sig
+  module Keypoint : sig
+    type t [@@deriving compare, equal, sexp]
+
+    val name : t -> string
+    val x : t -> float
+    val y : t -> float
+    val score : t -> float option
+  end
+
+  module Sample : sig
+    type t [@@deriving compare, equal, sexp]
+
+    val time_ms : t -> int
+    val keypoints : t -> Keypoint.t list
+  end
+
+  type t [@@deriving compare, equal, sexp]
+
+  val parse_string : string -> (t, Error.t) result
+  val load_json_file : path:string -> (t, Error.t) result
+  val samples : t -> Sample.t list
 end
 
 type action =

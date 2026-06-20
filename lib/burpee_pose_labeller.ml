@@ -10,11 +10,16 @@ module Error = struct
     | No_interval_in_progress
     | Invalid_manifest of string
     | Invalid_labels of string
+    | Invalid_trace of string
     | Manifest_file_error of
         { path : string
         ; message : string
         }
     | Label_file_error of
+        { path : string
+        ; message : string
+        }
+    | Trace_file_error of
         { path : string
         ; message : string
         }
@@ -188,6 +193,26 @@ module Bundle_manifest = struct
   let captures t = t.captures
 end
 
+module Bundle_paths = struct
+  let segment_filename_part = function
+    | Segment.Warmup -> "warmup"
+    | Main -> "main"
+  ;;
+
+  let trace_json_file ~bundle_dir ~capture_id ~segment =
+    Filename.concat
+      (Filename.concat bundle_dir "traces")
+      [%string
+        "capture-%{Capture_id.to_int capture_id#Int}-%{segment_filename_part segment}.json"]
+  ;;
+
+  let labels_json_file ~bundle_dir ~capture_id =
+    Filename.concat
+      (Filename.concat bundle_dir "labels")
+      [%string "capture-%{Capture_id.to_int capture_id#Int}-labels.json"]
+  ;;
+end
+
 module Interval = struct
   type t =
     { start_ms : int
@@ -230,6 +255,12 @@ module Label = struct
   let label t = t.label
 end
 
+let json_field json name =
+  match json with
+  | `Assoc fields -> List.Assoc.find fields name ~equal:String.equal
+  | _ -> None
+;;
+
 module Label_store = struct
   let invalid message = Error (Error.Invalid_labels message)
 
@@ -247,7 +278,7 @@ module Label_store = struct
   ;;
 
   let required_string json name =
-    match field json name with
+    match json_field json name with
     | Some (`String value) -> Ok value
     | Some _ -> invalid [%string "field %{name} must be a string"]
     | None -> invalid [%string "missing field %{name}"]
@@ -338,6 +369,111 @@ module Label_store = struct
     | exception exn ->
       Error (Error.Label_file_error { path; message = Exn.to_string exn })
   ;;
+end
+
+module Trace = struct
+  module Keypoint = struct
+    type t =
+      { name : string
+      ; x : float
+      ; y : float
+      ; score : float option
+      }
+    [@@deriving compare, equal, sexp]
+
+    let name t = t.name
+    let x t = t.x
+    let y t = t.y
+    let score t = t.score
+  end
+
+  module Sample = struct
+    type t =
+      { time_ms : int
+      ; keypoints : Keypoint.t list
+      }
+    [@@deriving compare, equal, sexp]
+
+    let time_ms t = t.time_ms
+    let keypoints t = t.keypoints
+  end
+
+  type t = { samples : Sample.t list } [@@deriving compare, equal, sexp]
+
+  let invalid message = Error (Error.Invalid_trace message)
+
+  let required_int json name =
+    match json_field json name with
+    | Some (`Int value) -> Ok value
+    | Some _ -> invalid [%string "field %{name} must be an integer"]
+    | None -> invalid [%string "missing field %{name}"]
+  ;;
+
+  let required_string json name =
+    match json_field json name with
+    | Some (`String value) -> Ok value
+    | Some _ -> invalid [%string "field %{name} must be a string"]
+    | None -> invalid [%string "missing field %{name}"]
+  ;;
+
+  let required_float json name =
+    match json_field json name with
+    | Some (`Float value) -> Ok value
+    | Some (`Int value) -> Ok (Float.of_int value)
+    | Some _ -> invalid [%string "field %{name} must be a number"]
+    | None -> invalid [%string "missing field %{name}"]
+  ;;
+
+  let optional_float json name =
+    match json_field json name with
+    | Some (`Float value) -> Ok (Some value)
+    | Some (`Int value) -> Ok (Some (Float.of_int value))
+    | Some `Null | None -> Ok None
+    | Some _ -> invalid [%string "field %{name} must be a number"]
+  ;;
+
+  let parse_keypoint json =
+    let open Result.Let_syntax in
+    let%bind name = required_string json "name" in
+    let%bind x = required_float json "x" in
+    let%bind y = required_float json "y" in
+    let%map score = optional_float json "score" in
+    { Keypoint.name; x; y; score }
+  ;;
+
+  let parse_sample json =
+    let open Result.Let_syntax in
+    let%bind time_ms = required_int json "time_ms" in
+    match json_field json "keypoints" with
+    | Some (`List keypoints) ->
+      let%map keypoints = Result.all (List.map keypoints ~f:parse_keypoint) in
+      { Sample.time_ms; keypoints }
+    | Some _ -> invalid "field keypoints must be an array"
+    | None -> invalid "missing field keypoints"
+  ;;
+
+  let parse_json = function
+    | `List samples ->
+      let open Result.Let_syntax in
+      let%map samples = Result.all (List.map samples ~f:parse_sample) in
+      { samples }
+    | _ -> invalid "trace file must be a JSON array"
+  ;;
+
+  let parse_string string =
+    match Yojson.Safe.from_string string with
+    | json -> parse_json json
+    | exception Yojson.Json_error message -> invalid message
+  ;;
+
+  let load_json_file ~path =
+    match In_channel.read_all path with
+    | contents -> parse_string contents
+    | exception exn ->
+      Error (Error.Trace_file_error { path; message = Exn.to_string exn })
+  ;;
+
+  let samples t = t.samples
 end
 
 type action =
