@@ -9,6 +9,15 @@ module Error : sig
     | Empty_label
     | No_interval_in_progress
     | Invalid_manifest of string
+    | Invalid_labels of string
+    | Manifest_file_error of
+        { path : string
+        ; message : string
+        }
+    | Label_file_error of
+        { path : string
+        ; message : string
+        }
   [@@deriving compare, equal, sexp]
 end
 
@@ -60,6 +69,7 @@ module Bundle_manifest : sig
   type t [@@deriving compare, equal, sexp]
 
   val parse_string : string -> (t, Error.t) result
+  val load : bundle_dir:string -> (t, Error.t) result
   val captures : t -> Capture_metadata.t list
 end
 
@@ -89,6 +99,13 @@ module Label : sig
   val interval : t -> Interval.t
   val label_type : t -> Label_type.t
   val label : t -> string
+end
+
+module Label_store : sig
+  val parse_string : string -> (Label.t list, Error.t) result
+  val to_string : Label.t list -> string
+  val load_json_file : path:string -> (Label.t list, Error.t) result
+  val save_json_file : path:string -> Label.t list -> (unit, Error.t) result
 end
 
 type action =

@@ -1,5 +1,5 @@
 (test
  (name test_burpee_pose_labeller)
- (libraries core burpee_pose_labeller)
+ (libraries core core_unix core_unix.sys_unix yojson burpee_pose_labeller)
  (preprocess
   (pps ppx_jane)))

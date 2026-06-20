@@ -9,6 +9,15 @@ module Error = struct
     | Empty_label
     | No_interval_in_progress
     | Invalid_manifest of string
+    | Invalid_labels of string
+    | Manifest_file_error of
+        { path : string
+        ; message : string
+        }
+    | Label_file_error of
+        { path : string
+        ; message : string
+        }
   [@@deriving compare, equal, sexp]
 end
 
@@ -168,6 +177,14 @@ module Bundle_manifest = struct
     | exception Yojson.Json_error message -> invalid message
   ;;
 
+  let load ~bundle_dir =
+    let path = Filename.concat bundle_dir "manifest.json" in
+    match In_channel.read_all path with
+    | contents -> parse_string contents
+    | exception exn ->
+      Error (Error.Manifest_file_error { path; message = Exn.to_string exn })
+  ;;
+
   let captures t = t.captures
 end
 
@@ -211,6 +228,116 @@ module Label = struct
   let interval t = t.interval
   let label_type t = t.label_type
   let label t = t.label
+end
+
+module Label_store = struct
+  let invalid message = Error (Error.Invalid_labels message)
+
+  let field json name =
+    match json with
+    | `Assoc fields -> List.Assoc.find fields name ~equal:String.equal
+    | _ -> None
+  ;;
+
+  let required_int json name =
+    match field json name with
+    | Some (`Int value) -> Ok value
+    | Some _ -> invalid [%string "field %{name} must be an integer"]
+    | None -> invalid [%string "missing field %{name}"]
+  ;;
+
+  let required_string json name =
+    match field json name with
+    | Some (`String value) -> Ok value
+    | Some _ -> invalid [%string "field %{name} must be a string"]
+    | None -> invalid [%string "missing field %{name}"]
+  ;;
+
+  let segment_of_string = function
+    | "warmup" -> Ok Segment.Warmup
+    | "main" -> Ok Main
+    | value -> invalid [%string "unknown segment %{value}"]
+  ;;
+
+  let segment_to_string = function
+    | Segment.Warmup -> "warmup"
+    | Main -> "main"
+  ;;
+
+  let label_type_of_string = function
+    | "phase" -> Ok Label_type.Phase
+    | "rep" -> Ok Rep
+    | "quality" -> Ok Quality
+    | "tag" -> Ok Tag
+    | value -> invalid [%string "unknown label_type %{value}"]
+  ;;
+
+  let label_type_to_string = function
+    | Label_type.Phase -> "phase"
+    | Rep -> "rep"
+    | Quality -> "quality"
+    | Tag -> "tag"
+  ;;
+
+  let parse_label ~index json =
+    let open Result.Let_syntax in
+    let%bind capture_id = required_int json "source_capture_run_id" in
+    let%bind segment_string = required_string json "segment" in
+    let%bind segment = segment_of_string segment_string in
+    let%bind start_ms = required_int json "start_ms" in
+    let%bind end_ms = required_int json "end_ms" in
+    let%bind interval = Interval.create ~start_ms ~end_ms in
+    let%bind label_type_string = required_string json "label_type" in
+    let%bind label_type = label_type_of_string label_type_string in
+    let%bind label = required_string json "label" in
+    Label.create
+      ~id:(Label_id.of_int (index + 1))
+      ~capture_id:(Capture_id.of_int capture_id)
+      ~segment
+      ~interval
+      ~label_type
+      ~label
+  ;;
+
+  let parse_json = function
+    | `List labels -> Result.all (List.mapi labels ~f:(fun index json -> parse_label ~index json))
+    | _ -> invalid "labels file must be a JSON array"
+  ;;
+
+  let parse_string string =
+    match Yojson.Safe.from_string string with
+    | json -> parse_json json
+    | exception Yojson.Json_error message -> invalid message
+  ;;
+
+  let label_to_json label =
+    `Assoc
+      [ "source_capture_run_id", `Int (Capture_id.to_int (Label.capture_id label))
+      ; "segment", `String (segment_to_string (Label.segment label))
+      ; "start_ms", `Int (Interval.start_ms (Label.interval label))
+      ; "end_ms", `Int (Interval.end_ms (Label.interval label))
+      ; "label_type", `String (label_type_to_string (Label.label_type label))
+      ; "label", `String (Label.label label)
+      ; "source", `String "manual"
+      ; "metadata", `Assoc []
+      ]
+  ;;
+
+  let to_string labels = Yojson.Safe.to_string (`List (List.map labels ~f:label_to_json))
+
+  let load_json_file ~path =
+    match In_channel.read_all path with
+    | contents -> parse_string contents
+    | exception exn ->
+      Error (Error.Label_file_error { path; message = Exn.to_string exn })
+  ;;
+
+  let save_json_file ~path labels =
+    match Out_channel.write_all path ~data:(to_string labels) with
+    | () -> Ok ()
+    | exception exn ->
+      Error (Error.Label_file_error { path; message = Exn.to_string exn })
+  ;;
 end
 
 type action =
