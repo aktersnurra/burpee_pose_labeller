@@ -180,6 +180,7 @@ module Model : sig
   val apply_exn : t -> action -> t
   val captures : t -> Capture_metadata.t list
   val selected_capture : t -> Capture_id.t option
+  val selected_capture_metadata : t -> Capture_metadata.t option
   val selected_segment : t -> Segment.t
   val current_time_ms : t -> int
   val draft_interval : t -> Interval.t option

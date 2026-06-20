@@ -443,6 +443,24 @@ let test_loading_manifest_updates_model_capture_index () =
   [%test_result: bool] (Model.has_unsaved_changes model) ~expect:false
 ;;
 
+let test_selected_capture_metadata_returns_selected_capture_from_index () =
+  let open Burpee_pose_labeller in
+  let manifest = require_ok (Bundle_manifest.parse_string sample_manifest_json) in
+  let model = Model.apply_exn Model.empty (Load_manifest manifest) in
+  let model = Model.apply_exn model (Select_capture (Capture_id.of_int 42)) in
+  [%test_result: string option]
+    (Option.bind (Model.selected_capture_metadata model) ~f:Capture_metadata.session_name)
+    ~expect:(Some "Lunch burpees")
+;;
+
+let test_select_capture_rejects_unknown_capture () =
+  let open Burpee_pose_labeller in
+  let manifest = require_ok (Bundle_manifest.parse_string sample_manifest_json) in
+  let model = Model.apply_exn Model.empty (Load_manifest manifest) in
+  let error = require_error (Model.apply model (Select_capture (Capture_id.of_int 999))) in
+  [%test_result: Error.t] error ~expect:(Error.Capture_not_found 999)
+;;
+
 let test_loading_workspace_updates_model_for_ui_state () =
   let open Burpee_pose_labeller in
   with_temp_bundle_dir ~f:(fun dir ->
@@ -463,6 +481,9 @@ let test_loading_workspace_updates_model_for_ui_state () =
     [%test_result: int option]
       (Option.map (Model.loaded_trace model) ~f:(fun trace -> List.length (Trace.samples trace)))
       ~expect:(Some 2);
+    [%test_result: string option]
+      (Option.bind (Model.selected_capture_metadata model) ~f:Capture_metadata.session_name)
+      ~expect:(Some "Lunch burpees");
     [%test_result: bool] (Model.has_unsaved_changes model) ~expect:false)
 ;;
 
@@ -507,6 +528,8 @@ let () =
   test_deleting_a_label_removes_it_and_marks_the_model_dirty ();
   test_editing_a_label_replaces_the_matching_id_and_marks_the_model_dirty ();
   test_loading_manifest_updates_model_capture_index ();
+  test_selected_capture_metadata_returns_selected_capture_from_index ();
+  test_select_capture_rejects_unknown_capture ();
   test_loading_workspace_updates_model_for_ui_state ();
   test_marking_saved_clears_unsaved_changes ()
 ;;

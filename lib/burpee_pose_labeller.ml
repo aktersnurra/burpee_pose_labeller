@@ -567,8 +567,23 @@ module Model = struct
     }
   ;;
 
+  let capture_exists captures capture_id =
+    List.exists captures ~f:(fun capture ->
+      Capture_id.equal (Capture_metadata.id capture) capture_id)
+  ;;
+
+  let upsert_capture captures capture =
+    let capture_id = Capture_metadata.id capture in
+    if capture_exists captures capture_id
+    then captures
+    else capture :: captures
+  ;;
+
   let apply t = function
-    | Select_capture selected_capture -> Ok { t with selected_capture = Some selected_capture }
+    | Select_capture selected_capture ->
+      if capture_exists t.captures selected_capture
+      then Ok { t with selected_capture = Some selected_capture }
+      else Error (Error.Capture_not_found (Capture_id.to_int selected_capture))
     | Select_segment selected_segment -> Ok { t with selected_segment }
     | Seek current_time_ms -> Ok { t with current_time_ms }
     | Start_interval start_ms -> Ok { t with interval_start_ms = Some start_ms; draft_interval = None }
@@ -590,9 +605,10 @@ module Model = struct
         }
     | Load_manifest manifest -> Ok { t with captures = Bundle_manifest.captures manifest }
     | Load_workspace workspace ->
+      let capture = Bundle_workspace.capture workspace in
       Ok
-        { captures = t.captures
-        ; selected_capture = Some (Capture_metadata.id (Bundle_workspace.capture workspace))
+        { captures = upsert_capture t.captures capture
+        ; selected_capture = Some (Capture_metadata.id capture)
         ; selected_segment = Bundle_workspace.segment workspace
         ; current_time_ms = 0
         ; interval_start_ms = None
@@ -618,6 +634,13 @@ module Model = struct
 
   let captures t = t.captures
   let selected_capture t = t.selected_capture
+
+  let selected_capture_metadata t =
+    Option.bind t.selected_capture ~f:(fun capture_id ->
+      List.find t.captures ~f:(fun capture ->
+        Capture_id.equal (Capture_metadata.id capture) capture_id))
+  ;;
+
   let selected_segment t = t.selected_segment
   let current_time_ms t = t.current_time_ms
   let draft_interval t = t.draft_interval

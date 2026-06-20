@@ -22,6 +22,19 @@ let sample_manifest_json =
       "model_version": "2026-06-18",
       "labels_present": true,
       "analysis_present": true
+    },
+    {
+      "capture_run_id": 43,
+      "recorded_at": "2026-06-19T07:18:04Z",
+      "session_name": "Morning form check",
+      "has_warmup": false,
+      "has_main": true,
+      "warmup_sample_count": null,
+      "main_sample_count": 920,
+      "model_name": "hsmm-phase",
+      "model_version": "2026-06-18",
+      "labels_present": false,
+      "analysis_present": true
     }
   ]
 }
@@ -30,7 +43,10 @@ let sample_manifest_json =
 
 let capture_index_model =
   match Labeller.Bundle_manifest.parse_string sample_manifest_json with
-  | Ok manifest -> Labeller.Model.apply_exn Labeller.Model.empty (Load_manifest manifest)
+  | Ok manifest ->
+    Labeller.Model.empty
+    |> Fn.flip Labeller.Model.apply_exn (Load_manifest manifest)
+    |> Fn.flip Labeller.Model.apply_exn (Select_capture (Labeller.Capture_id.of_int 42))
   | Error _ -> Labeller.Model.empty
 ;;
 
@@ -63,11 +79,11 @@ let pill text =
     [ Vdom.Node.text text ]
 ;;
 
-let status_pill ~active text =
-  let colors =
+let status_pill ~active label =
+  let colors, state =
     if active
-    then "background:#f2efe7;color:#5f513f;border-color:#ddd5c6;"
-    else "background:#fafafa;color:#9a958c;border-color:#e8e5df;"
+    then "background:#f2efe7;color:#5f513f;border-color:#ddd5c6;", "present"
+    else "background:#fafafa;color:#6f6a60;border-color:#e8e5df;", "missing"
   in
   Vdom.Node.span
     ~attrs:
@@ -75,15 +91,25 @@ let status_pill ~active text =
           [%string
             "display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px solid;border-radius:999px;font-size:12px;line-height:22px;%{colors}"]
       ]
-    [ Vdom.Node.text text ]
+    [ Vdom.Node.text [%string "%{label} %{state}"] ]
 ;;
 
-let capture_row capture =
+let capture_row ~selected_capture capture =
+  let selected =
+    Option.exists selected_capture ~f:(fun selected_capture ->
+      Labeller.Capture_id.equal
+        selected_capture
+        (Labeller.Capture_metadata.id capture))
+  in
+  let row_style =
+    if selected
+    then
+      "display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:14px 12px;margin:0 -12px;border-bottom:1px solid #e3ded3;border-radius:8px;background:#f5f1e8;"
+    else
+      "display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:14px 0;border-bottom:1px solid #ece9e2;"
+  in
   Vdom.Node.div
-    ~attrs:
-      [ style
-          "display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:14px 0;border-bottom:1px solid #ece9e2;"
-      ]
+    ~attrs:[ style row_style ]
     [ Vdom.Node.div
         [ Vdom.Node.div
             ~attrs:[ style "display:flex;align-items:center;gap:8px;margin-bottom:6px;" ]
@@ -93,7 +119,7 @@ let capture_row capture =
             ; pill (segment_text capture)
             ]
         ; Vdom.Node.div
-            ~attrs:[ style "font-size:12px;color:#8a857c;" ]
+            ~attrs:[ style "font-size:12px;color:#6f6a60;" ]
             [ Vdom.Node.text
                 [%string
                   "%{text_or_dash (Labeller.Capture_metadata.recorded_at capture)} · %{sample_text capture}"]
@@ -107,7 +133,7 @@ let capture_row capture =
     ]
 ;;
 
-let capture_index captures =
+let capture_index ~selected_capture captures =
   Vdom.Node.section
     ~attrs:
       [ style
@@ -117,50 +143,93 @@ let capture_index captures =
         ~attrs:[ style "display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px;" ]
         [ Vdom.Node.div
             [ Vdom.Node.div
-                ~attrs:[ style "font-size:12px;color:#8d877d;margin-bottom:6px;" ]
+                ~attrs:[ style "font-size:12px;color:#6f6a60;margin-bottom:6px;" ]
                 [ Vdom.Node.text "Capture index" ]
             ; Vdom.Node.h2
                 ~attrs:[ style "font-size:20px;line-height:1.2;margin:0;color:#25231f;font-weight:560;" ]
                 [ Vdom.Node.text "Pose export bundle" ]
             ]
         ; Vdom.Node.div
-            ~attrs:[ style "font-size:12px;color:#8d877d;" ]
-            [ Vdom.Node.text [%string "%{List.length captures#Int} capture"] ]
+            ~attrs:[ style "font-size:12px;color:#6f6a60;" ]
+            [ let count = List.length captures in
+              Vdom.Node.text [%string "%{count#Int} capture%{if count = 1 then "" else "s"}"]
+            ] ]
         ]
     ; (match captures with
        | [] ->
          Vdom.Node.div
            ~attrs:
              [ style
-                 "padding:42px 12px;color:#8d877d;font-size:14px;text-align:center;border-top:1px solid #ece9e2;"
+                 "padding:42px 12px;color:#6f6a60;font-size:14px;text-align:center;border-top:1px solid #ece9e2;"
              ]
            [ Vdom.Node.text "Open a bundle to see captured pose traces here." ]
-       | captures -> Vdom.Node.div (List.map captures ~f:capture_row))
+       | captures -> Vdom.Node.div (List.map captures ~f:(capture_row ~selected_capture)))
     ]
 ;;
 
-let workspace_preview =
+let metadata_row label value =
+  Vdom.Node.div
+    ~attrs:
+      [ style
+          "display:grid;grid-template-columns:104px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid #ebe7df;font-size:13px;"
+      ]
+    [ Vdom.Node.div ~attrs:[ style "color:#6f6a60;" ] [ Vdom.Node.text label ]
+    ; Vdom.Node.div ~attrs:[ style "color:#3a3731;" ] [ Vdom.Node.text value ]
+    ]
+;;
+
+let workspace_preview selected_capture =
   Vdom.Node.section
     ~attrs:
       [ style
           "min-height:320px;background:#fbfaf7;border:1px solid #e7e3da;border-radius:10px;padding:22px 24px;"
       ]
     [ Vdom.Node.div
-        ~attrs:[ style "font-size:12px;color:#8d877d;margin-bottom:6px;" ]
+        ~attrs:[ style "font-size:12px;color:#6f6a60;margin-bottom:6px;" ]
         [ Vdom.Node.text "Workspace" ]
-    ; Vdom.Node.h2
-        ~attrs:[ style "font-size:20px;line-height:1.2;margin:0 0 14px;color:#25231f;font-weight:560;" ]
-        [ Vdom.Node.text "Select a capture to label" ]
-    ; Vdom.Node.p
-        ~attrs:[ style "max-width:420px;margin:0;color:#6f6a60;font-size:14px;line-height:1.65;" ]
-        [ Vdom.Node.text
-            "The replay canvas, timeline, and interval editor will live here. For now this shell proves the capture index can render bundle metadata in the app."
-        ]
+    ; (match selected_capture with
+       | None ->
+         Vdom.Node.div
+           [ Vdom.Node.h2
+               ~attrs:[ style "font-size:20px;line-height:1.2;margin:0 0 14px;color:#25231f;font-weight:560;" ]
+               [ Vdom.Node.text "Select a capture to label" ]
+           ; Vdom.Node.p
+               ~attrs:[ style "max-width:420px;margin:0;color:#6f6a60;font-size:14px;line-height:1.65;" ]
+               [ Vdom.Node.text
+                   "The replay canvas, timeline, and interval editor will live here. For now this shell proves the capture index can render bundle metadata in the app."
+               ]
+           ]
+       | Some capture ->
+         Vdom.Node.div
+           [ Vdom.Node.h2
+               ~attrs:
+                 [ style
+                     "font-size:20px;line-height:1.2;margin:0 0 14px;color:#25231f;font-weight:560;"
+                 ]
+               [ Vdom.Node.text (text_or_dash (Labeller.Capture_metadata.session_name capture)) ]
+           ; Vdom.Node.div
+               ~attrs:[ style "margin:18px 0 20px;" ]
+               [ metadata_row "Recorded" (text_or_dash (Labeller.Capture_metadata.recorded_at capture))
+               ; metadata_row "Segments" (segment_text capture)
+               ; metadata_row "Samples" (sample_text capture)
+               ; metadata_row "Model" (text_or_dash (Labeller.Capture_metadata.model_name capture))
+               ; metadata_row
+                   "Version"
+                   (text_or_dash (Labeller.Capture_metadata.model_version capture))
+               ]
+           ; Vdom.Node.p
+               ~attrs:[ style "margin:0;color:#7b756b;font-size:13px;line-height:1.6;" ]
+               [ Vdom.Node.text
+                   "Next: load the selected trace into the replay canvas and expose interval labelling controls."
+               ]
+           ])
     ]
 ;;
 
 let component _graph =
   let captures = Labeller.Model.captures capture_index_model in
+  let selected_capture_id = Labeller.Model.selected_capture capture_index_model in
+  let selected_capture = Labeller.Model.selected_capture_metadata capture_index_model in
   Bonsai.const
     (Vdom.Node.div
        ~attrs:
@@ -172,7 +241,7 @@ let component _graph =
            [ Vdom.Node.header
                ~attrs:[ style "margin-bottom:28px;" ]
                [ Vdom.Node.div
-                   ~attrs:[ style "font-size:13px;color:#8d877d;margin-bottom:8px;" ]
+                   ~attrs:[ style "font-size:13px;color:#6f6a60;margin-bottom:8px;" ]
                    [ Vdom.Node.text "Burpee Pose Labeller" ]
                ; Vdom.Node.h1
                    ~attrs:
@@ -188,7 +257,9 @@ let component _graph =
                ]
            ; Vdom.Node.div
                ~attrs:[ style "display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,0.9fr);gap:18px;align-items:start;" ]
-               [ capture_index captures; workspace_preview ]
+               [ capture_index ~selected_capture:selected_capture_id captures
+               ; workspace_preview selected_capture
+               ]
            ]
        ])
 ;;
