@@ -45,8 +45,8 @@ let capture_index_model =
   match Labeller.Bundle_manifest.parse_string sample_manifest_json with
   | Ok manifest ->
     Labeller.Model.empty
-    |> Fn.flip Labeller.Model.apply_exn (Load_manifest manifest)
-    |> Fn.flip Labeller.Model.apply_exn (Select_capture (Labeller.Capture_id.of_int 42))
+    |> Fn.flip Labeller.Model.apply_exn (Labeller.Load_manifest manifest)
+    |> Fn.flip Labeller.Model.apply_exn (Labeller.Select_capture (Labeller.Capture_id.of_int 42))
   | Error _ -> Labeller.Model.empty
 ;;
 
@@ -94,7 +94,21 @@ let status_pill ~active label =
     [ Vdom.Node.text [%string "%{label} %{state}"] ]
 ;;
 
-let capture_row ~selected_capture capture =
+module Ui_model = struct
+  type t = Labeller.Model.t [@@deriving sexp, equal]
+end
+
+module Ui_action = struct
+  type t = Labeller.action [@@deriving sexp_of]
+end
+
+let apply_ui_action ~inject:_ ~schedule_event:_ model action =
+  match Labeller.Model.apply model action with
+  | Ok model -> model
+  | Error _ -> model
+;;
+
+let capture_row ~selected_capture ~inject_action capture =
   let selected =
     Option.exists selected_capture ~f:(fun selected_capture ->
       Labeller.Capture_id.equal
@@ -108,8 +122,16 @@ let capture_row ~selected_capture capture =
     else
       "display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:14px 0;border-bottom:1px solid #ece9e2;"
   in
-  Vdom.Node.div
-    ~attrs:[ style row_style ]
+  Vdom.Node.button
+    ~attrs:
+      [ style
+          [%string
+            "width:100%;appearance:none;border:0;text-align:left;font:inherit;cursor:pointer;%{row_style}"]
+      ; Vdom.Attr.create "type" "button"
+      ; Vdom.Attr.create "aria-selected" (Bool.to_string selected)
+      ; Vdom.Attr.on_click (fun _ ->
+          inject_action (Labeller.Select_capture (Labeller.Capture_metadata.id capture)))
+      ]
     [ Vdom.Node.div
         [ Vdom.Node.div
             ~attrs:[ style "display:flex;align-items:center;gap:8px;margin-bottom:6px;" ]
@@ -133,7 +155,7 @@ let capture_row ~selected_capture capture =
     ]
 ;;
 
-let capture_index ~selected_capture captures =
+let capture_index ~selected_capture ~inject_action captures =
   Vdom.Node.section
     ~attrs:
       [ style
@@ -152,8 +174,9 @@ let capture_index ~selected_capture captures =
         ; Vdom.Node.div
             ~attrs:[ style "font-size:12px;color:#6f6a60;" ]
             [ let count = List.length captures in
-              Vdom.Node.text [%string "%{count#Int} capture%{if count = 1 then "" else "s"}"]
-            ] ]
+              let suffix = if count = 1 then "" else "s" in
+              Vdom.Node.text [%string "%{count#Int} capture%{suffix}"]
+            ]
         ]
     ; (match captures with
        | [] ->
@@ -163,7 +186,8 @@ let capture_index ~selected_capture captures =
                  "padding:42px 12px;color:#6f6a60;font-size:14px;text-align:center;border-top:1px solid #ece9e2;"
              ]
            [ Vdom.Node.text "Open a bundle to see captured pose traces here." ]
-       | captures -> Vdom.Node.div (List.map captures ~f:(capture_row ~selected_capture)))
+       | captures ->
+         Vdom.Node.div (List.map captures ~f:(capture_row ~selected_capture ~inject_action)))
     ]
 ;;
 
@@ -226,12 +250,21 @@ let workspace_preview selected_capture =
     ]
 ;;
 
-let component _graph =
-  let captures = Labeller.Model.captures capture_index_model in
-  let selected_capture_id = Labeller.Model.selected_capture capture_index_model in
-  let selected_capture = Labeller.Model.selected_capture_metadata capture_index_model in
-  Bonsai.const
-    (Vdom.Node.div
+let component =
+  let open Bonsai.Let_syntax in
+  let%sub model, inject_action =
+    Bonsai.state_machine0
+      (module Ui_model)
+      (module Ui_action)
+      ~default_model:capture_index_model
+      ~apply_action:apply_ui_action
+  in
+  let%arr model = model
+  and inject_action = inject_action in
+  let captures = Labeller.Model.captures model in
+  let selected_capture_id = Labeller.Model.selected_capture model in
+  let selected_capture = Labeller.Model.selected_capture_metadata model in
+  Vdom.Node.div
        ~attrs:
          [ style
              "min-height:100vh;background:#f7f5f0;color:#25231f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
@@ -257,11 +290,11 @@ let component _graph =
                ]
            ; Vdom.Node.div
                ~attrs:[ style "display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,0.9fr);gap:18px;align-items:start;" ]
-               [ capture_index ~selected_capture:selected_capture_id captures
+               [ capture_index ~selected_capture:selected_capture_id ~inject_action captures
                ; workspace_preview selected_capture
                ]
            ]
-       ])
+       ]
 ;;
 
 let () = Bonsai_web.Start.start component

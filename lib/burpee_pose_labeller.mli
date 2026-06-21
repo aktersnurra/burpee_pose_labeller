@@ -173,7 +173,7 @@ type action =
 [@@deriving sexp]
 
 module Model : sig
-  type t [@@deriving sexp]
+  type t [@@deriving sexp, equal]
 
   val empty : t
   val apply : t -> action -> (t, Error.t) result

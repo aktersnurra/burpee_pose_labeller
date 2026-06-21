@@ -552,7 +552,7 @@ module Model = struct
     ; labels : Label.t list
     ; has_unsaved_changes : bool
     }
-  [@@deriving sexp]
+  [@@deriving sexp, equal]
 
   let empty =
     { captures = []
