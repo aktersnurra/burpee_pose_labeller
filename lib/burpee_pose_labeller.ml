@@ -204,15 +204,86 @@ module Bundle_paths = struct
     Filename.concat
       (Filename.concat bundle_dir "traces")
       [%string
-        "capture-%{Capture_id.to_int capture_id#Int}-%{segment_filename_part segment}.json"]
+        "capture-%{Capture_id.to_int capture_id#Int}-%{segment_filename_part segment}.json.zst"]
   ;;
 
   let labels_json_file ~bundle_dir ~capture_id =
     Filename.concat
       (Filename.concat bundle_dir "labels")
-      [%string "capture-%{Capture_id.to_int capture_id#Int}-labels.json"]
+      [%string "capture-%{Capture_id.to_int capture_id#Int}-labels.json.zst"]
   ;;
 end
+
+let is_zstd_path path = String.is_suffix path ~suffix:".zst"
+
+let run_command command =
+  match Stdlib.Sys.command command with
+  | 0 -> Ok ()
+  | exit_code -> Error [%string "command failed with exit code %{exit_code#Int}"]
+;;
+
+let read_text_file ~path ~on_error =
+  if is_zstd_path path
+  then
+    if not (Stdlib.Sys.file_exists path)
+    then Error (on_error ~path ~message:"No such file or directory")
+    else (
+      let temp_path = Stdlib.Filename.temp_file "burpee-pose-labeller-" ".json" in
+      let command =
+        [%string
+          "zstd -q -d -f %{Stdlib.Filename.quote path} -o %{Stdlib.Filename.quote temp_path}"]
+      in
+      match run_command command with
+      | Error message ->
+        (match Stdlib.Sys.remove temp_path with
+         | () -> ()
+         | exception _ -> ());
+        Error (on_error ~path ~message)
+      | Ok () ->
+        (match In_channel.read_all temp_path with
+         | contents ->
+           Stdlib.Sys.remove temp_path;
+           Ok contents
+         | exception exn ->
+           (match Stdlib.Sys.remove temp_path with
+            | () -> ()
+            | exception _ -> ());
+           Error (on_error ~path ~message:(Exn.to_string exn))))
+  else
+    match In_channel.read_all path with
+    | contents -> Ok contents
+    | exception exn -> Error (on_error ~path ~message:(Exn.to_string exn))
+;;
+
+let write_text_file ~path ~data ~on_error =
+  if is_zstd_path path
+  then (
+    let temp_path = Stdlib.Filename.temp_file "burpee-pose-labeller-" ".json" in
+    match Out_channel.write_all temp_path ~data with
+    | exception exn ->
+      (match Stdlib.Sys.remove temp_path with
+       | () -> ()
+       | exception _ -> ());
+      Error (on_error ~path ~message:(Exn.to_string exn))
+    | () ->
+      let command =
+        [%string
+          "zstd -q -f %{Stdlib.Filename.quote temp_path} -o %{Stdlib.Filename.quote path}"]
+      in
+      (match run_command command with
+       | Ok () ->
+         Stdlib.Sys.remove temp_path;
+         Ok ()
+       | Error message ->
+         (match Stdlib.Sys.remove temp_path with
+          | () -> ()
+          | exception _ -> ());
+         Error (on_error ~path ~message)))
+  else
+    match Out_channel.write_all path ~data with
+    | () -> Ok ()
+    | exception exn -> Error (on_error ~path ~message:(Exn.to_string exn))
+;;
 
 module Interval = struct
   type t =
@@ -358,17 +429,15 @@ module Label_store = struct
   let to_string labels = Yojson.Safe.to_string (`List (List.map labels ~f:label_to_json))
 
   let load_json_file ~path =
-    match In_channel.read_all path with
-    | contents -> parse_string contents
-    | exception exn ->
-      Error (Error.Label_file_error { path; message = Exn.to_string exn })
+    let on_error ~path ~message = Error.Label_file_error { path; message } in
+    let open Result.Let_syntax in
+    let%bind contents = read_text_file ~path ~on_error in
+    parse_string contents
   ;;
 
   let save_json_file ~path labels =
-    match Out_channel.write_all path ~data:(to_string labels) with
-    | () -> Ok ()
-    | exception exn ->
-      Error (Error.Label_file_error { path; message = Exn.to_string exn })
+    let on_error ~path ~message = Error.Label_file_error { path; message } in
+    write_text_file ~path ~data:(to_string labels) ~on_error
   ;;
 end
 
@@ -473,10 +542,10 @@ module Trace = struct
   ;;
 
   let load_json_file ~path =
-    match In_channel.read_all path with
-    | contents -> parse_string contents
-    | exception exn ->
-      Error (Error.Trace_file_error { path; message = Exn.to_string exn })
+    let on_error ~path ~message = Error.Trace_file_error { path; message } in
+    let open Result.Let_syntax in
+    let%bind contents = read_text_file ~path ~on_error in
+    parse_string contents
   ;;
 
   let samples t = t.samples

@@ -57,22 +57,27 @@ let test_manifest_parse_exposes_capture_index_metadata () =
   [%test_result: bool] (Capture_metadata.analysis_present capture) ~expect:true
 ;;
 
+let shell_quote = Stdlib.Filename.quote
+
 let with_temp_bundle_dir ~f =
   let dir = Core_unix.mkdtemp "burpee-pose-labeller-test-XXXXXX" in
   Exn.protect
     ~f:(fun () -> f dir)
     ~finally:(fun () ->
-      let manifest_path = Filename.concat dir "manifest.json" in
-      let labels_dir = Filename.concat dir "labels" in
-      let traces_dir = Filename.concat dir "traces" in
-      let label_path = Filename.concat labels_dir "capture-42-labels.json" in
-      let trace_path = Filename.concat traces_dir "capture-42-main.json" in
-      if Sys_unix.file_exists_exn manifest_path then Core_unix.unlink manifest_path;
-      if Sys_unix.file_exists_exn label_path then Core_unix.unlink label_path;
-      if Sys_unix.file_exists_exn trace_path then Core_unix.unlink trace_path;
-      if Sys_unix.file_exists_exn labels_dir then Core_unix.rmdir labels_dir;
-      if Sys_unix.file_exists_exn traces_dir then Core_unix.rmdir traces_dir;
-      Core_unix.rmdir dir)
+      match Core_unix.system [%string "rm -rf %{shell_quote dir}"] with
+      | Ok () -> ()
+      | Error _ -> ())
+;;
+
+let write_zstd_file ~path contents =
+  let plain_path = path ^ ".plain" in
+  Out_channel.write_all plain_path ~data:contents;
+  match
+    Core_unix.system
+      [%string "zstd -q -f %{shell_quote plain_path} -o %{shell_quote path}"]
+  with
+  | Ok () -> Core_unix.unlink plain_path
+  | Error error -> raise_s [%message "zstd compression failed" (error : Core_unix.Exit_or_signal.error)]
 ;;
 
 let test_bundle_paths_use_standard_bundle_layout () =
@@ -82,16 +87,16 @@ let test_bundle_paths_use_standard_bundle_layout () =
        ~bundle_dir:"/bundle"
        ~capture_id:(Capture_id.of_int 42)
        ~segment:Segment.Main)
-    ~expect:"/bundle/traces/capture-42-main.json";
+    ~expect:"/bundle/traces/capture-42-main.json.zst";
   [%test_result: string]
     (Bundle_paths.trace_json_file
        ~bundle_dir:"/bundle"
        ~capture_id:(Capture_id.of_int 42)
        ~segment:Segment.Warmup)
-    ~expect:"/bundle/traces/capture-42-warmup.json";
+    ~expect:"/bundle/traces/capture-42-warmup.json.zst";
   [%test_result: string]
     (Bundle_paths.labels_json_file ~bundle_dir:"/bundle" ~capture_id:(Capture_id.of_int 42))
-    ~expect:"/bundle/labels/capture-42-labels.json"
+    ~expect:"/bundle/labels/capture-42-labels.json.zst"
 ;;
 
 let test_manifest_parse_rejects_missing_captures () =
@@ -195,7 +200,7 @@ let test_label_store_save_and_load_json_file_round_trips_labels () =
   with_temp_bundle_dir ~f:(fun dir ->
     let labels_dir = Filename.concat dir "labels" in
     Core_unix.mkdir labels_dir;
-    let path = Filename.concat labels_dir "capture-42-labels.json" in
+    let path = Filename.concat labels_dir "capture-42-labels.json.zst" in
     let interval = require_ok (Interval.create ~start_ms:10000 ~end_ms:13200) in
     let label =
       require_ok
@@ -273,8 +278,8 @@ let test_trace_load_json_file_reads_trace_samples () =
   with_temp_bundle_dir ~f:(fun dir ->
     let traces_dir = Filename.concat dir "traces" in
     Core_unix.mkdir traces_dir;
-    let path = Filename.concat traces_dir "capture-42-main.json" in
-    Out_channel.write_all path ~data:sample_trace_json;
+    let path = Filename.concat traces_dir "capture-42-main.json.zst" in
+    write_zstd_file ~path sample_trace_json;
     let trace = require_ok (Trace.load_json_file ~path) in
     [%test_result: int] (List.length (Trace.samples trace)) ~expect:2)
 ;;
@@ -293,20 +298,21 @@ let write_minimal_bundle ?(labels = Some sample_labels_json) dir =
   Out_channel.write_all (Filename.concat dir "manifest.json") ~data:sample_manifest_json;
   let traces_dir = Filename.concat dir "traces" in
   Core_unix.mkdir traces_dir;
-  Out_channel.write_all
-    (Bundle_paths.trace_json_file
-       ~bundle_dir:dir
-       ~capture_id:(Capture_id.of_int 42)
-       ~segment:Segment.Main)
-    ~data:sample_trace_json;
+  write_zstd_file
+    ~path:
+      (Bundle_paths.trace_json_file
+         ~bundle_dir:dir
+         ~capture_id:(Capture_id.of_int 42)
+         ~segment:Segment.Main)
+    sample_trace_json;
   match labels with
   | None -> ()
   | Some labels ->
     let labels_dir = Filename.concat dir "labels" in
     Core_unix.mkdir labels_dir;
-    Out_channel.write_all
-      (Bundle_paths.labels_json_file ~bundle_dir:dir ~capture_id:(Capture_id.of_int 42))
-      ~data:labels
+    write_zstd_file
+      ~path:(Bundle_paths.labels_json_file ~bundle_dir:dir ~capture_id:(Capture_id.of_int 42))
+      labels
 ;;
 
 let test_bundle_workspace_load_reads_capture_trace_and_labels () =
