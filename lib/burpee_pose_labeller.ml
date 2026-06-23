@@ -66,6 +66,13 @@ module Label_type = struct
 end
 
 module Capture_metadata = struct
+  type operational_status =
+    | Needs_labels
+    | Ready_to_review
+    | Analysis_missing
+    | No_trace_data
+  [@@deriving compare, equal, sexp]
+
   type t =
     { id : Capture_id.t
     ; recorded_at : string option
@@ -99,6 +106,18 @@ module Capture_metadata = struct
   let model_version t = t.model_version
   let labels_present t = t.labels_present
   let analysis_present t = t.analysis_present
+
+  let has_any_trace t = t.has_warmup || t.has_main
+
+  let operational_status t =
+    if not (has_any_trace t)
+    then No_trace_data
+    else if not t.analysis_present
+    then Analysis_missing
+    else if not t.labels_present
+    then Needs_labels
+    else Ready_to_review
+  ;;
 end
 
 module Bundle_manifest = struct

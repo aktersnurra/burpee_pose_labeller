@@ -58,6 +58,13 @@ module Label_type : sig
 end
 
 module Capture_metadata : sig
+  type operational_status =
+    | Needs_labels
+    | Ready_to_review
+    | Analysis_missing
+    | No_trace_data
+  [@@deriving compare, equal, sexp]
+
   type t [@@deriving compare, equal, sexp]
 
   val id : t -> Capture_id.t
@@ -69,6 +76,7 @@ module Capture_metadata : sig
   val model_version : t -> string option
   val labels_present : t -> bool
   val analysis_present : t -> bool
+  val operational_status : t -> operational_status
 end
 
 module Bundle_manifest : sig

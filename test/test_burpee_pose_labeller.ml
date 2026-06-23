@@ -57,6 +57,36 @@ let test_manifest_parse_exposes_capture_index_metadata () =
   [%test_result: bool] (Capture_metadata.analysis_present capture) ~expect:true
 ;;
 
+let test_capture_metadata_status_prioritizes_next_labelling_decision () =
+  let open Burpee_pose_labeller in
+  let manifest =
+    require_ok
+      (Bundle_manifest.parse_string
+         {|
+{
+  "version": 1,
+  "captures": [
+    {"capture_run_id":1,"has_warmup":false,"has_main":false,"labels_present":false,"analysis_present":false},
+    {"capture_run_id":2,"has_warmup":false,"has_main":true,"main_sample_count":900,"labels_present":false,"analysis_present":false},
+    {"capture_run_id":3,"has_warmup":false,"has_main":true,"main_sample_count":900,"labels_present":false,"analysis_present":true},
+    {"capture_run_id":4,"has_warmup":true,"has_main":true,"warmup_sample_count":90,"main_sample_count":900,"labels_present":true,"analysis_present":true}
+  ]
+}
+|})
+  in
+  let statuses =
+    Bundle_manifest.captures manifest |> List.map ~f:Capture_metadata.operational_status
+  in
+  [%test_result: Capture_metadata.operational_status list]
+    statuses
+    ~expect:
+      [ Capture_metadata.No_trace_data
+      ; Capture_metadata.Analysis_missing
+      ; Capture_metadata.Needs_labels
+      ; Capture_metadata.Ready_to_review
+      ]
+;;
+
 let shell_quote = Stdlib.Filename.quote
 
 let with_temp_bundle_dir ~f =
@@ -513,6 +543,7 @@ let test_marking_saved_clears_unsaved_changes () =
 
 let () =
   test_manifest_parse_exposes_capture_index_metadata ();
+  test_capture_metadata_status_prioritizes_next_labelling_decision ();
   test_bundle_paths_use_standard_bundle_layout ();
   test_manifest_parse_rejects_missing_captures ();
   test_manifest_load_reads_manifest_json_from_bundle_dir ();

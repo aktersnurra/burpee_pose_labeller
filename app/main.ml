@@ -62,12 +62,53 @@ let segment_text capture =
   | false, false -> "no traces"
 ;;
 
-let sample_text capture =
-  let count segment =
-    Labeller.Capture_metadata.sample_count capture segment
-    |> Option.value_map ~default:"—" ~f:Int.to_string
-  in
-  [%string "main %{count Main} · warmup %{count Warmup}"]
+let sample_count_text capture segment =
+  Labeller.Capture_metadata.sample_count capture segment
+  |> Option.value_map ~default:"—" ~f:(fun count -> [%string "%{count#Int} samples"])
+;;
+
+let primary_segment capture =
+  if Labeller.Capture_metadata.has_segment capture Labeller.Segment.Main
+  then Some Labeller.Segment.Main
+  else if Labeller.Capture_metadata.has_segment capture Labeller.Segment.Warmup
+  then Some Labeller.Segment.Warmup
+  else None
+;;
+
+let segment_name = function
+  | Labeller.Segment.Warmup -> "Warmup"
+  | Main -> "Main"
+;;
+
+let trace_summary capture =
+  match primary_segment capture with
+  | None -> "No trace data"
+  | Some segment -> [%string "%{segment_name segment} trace · %{sample_count_text capture segment}"]
+;;
+
+let status_label = function
+  | Labeller.Capture_metadata.Needs_labels -> "Needs labels"
+  | Ready_to_review -> "Ready to review"
+  | Analysis_missing -> "Analysis missing"
+  | No_trace_data -> "No trace data"
+;;
+
+let next_action_text capture =
+  match Labeller.Capture_metadata.operational_status capture, primary_segment capture with
+  | No_trace_data, _ -> "Next: export or restore trace data"
+  | Analysis_missing, _ -> "Next: run pose analysis"
+  | Needs_labels, Some segment -> [%string "Next: label %{segment_name segment} segment"]
+  | Needs_labels, None -> "Next: choose a trace to label"
+  | Ready_to_review, Some segment -> [%string "Next: review %{segment_name segment} labels"]
+  | Ready_to_review, None -> "Next: review labels"
+;;
+
+let status_detail_text capture =
+  match Labeller.Capture_metadata.operational_status capture with
+  | No_trace_data -> "Trace missing · labelling unavailable"
+  | Analysis_missing -> [%string "%{trace_summary capture} · analysis missing"]
+  | Needs_labels -> [%string "%{trace_summary capture} · labels missing"]
+  | Ready_to_review -> [%string "%{trace_summary capture} · labels ready"]
 ;;
 
 let pill text =
@@ -79,19 +120,22 @@ let pill text =
     [ Vdom.Node.text text ]
 ;;
 
-let status_pill ~active label =
-  let colors, state =
-    if active
-    then "background:#f2efe7;color:#5f513f;border-color:#ddd5c6;", "present"
-    else "background:#fafafa;color:#6f6a60;border-color:#e8e5df;", "missing"
+let status_badge status =
+  let colors =
+    match status with
+    | Labeller.Capture_metadata.Needs_labels ->
+      "background:#fff6df;color:#6c4f13;border-color:#ead8a6;"
+    | Ready_to_review -> "background:#eef6ed;color:#405f3d;border-color:#d5e4d1;"
+    | Analysis_missing -> "background:#f8eeee;color:#754a45;border-color:#ead3cf;"
+    | No_trace_data -> "background:#f3f2ef;color:#6f6a60;border-color:#dfdcd4;"
   in
   Vdom.Node.span
     ~attrs:
       [ style
           [%string
-            "display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px solid;border-radius:999px;font-size:12px;line-height:22px;%{colors}"]
+            "display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px solid;border-radius:999px;font-size:12px;line-height:22px;white-space:nowrap;%{colors}"]
       ]
-    [ Vdom.Node.text [%string "%{label} %{state}"] ]
+    [ Vdom.Node.text (status_label status) ]
 ;;
 
 module Ui_model = struct
@@ -142,16 +186,11 @@ let capture_row ~selected_capture ~inject_action capture =
             ]
         ; Vdom.Node.div
             ~attrs:[ style "font-size:12px;color:#6f6a60;" ]
-            [ Vdom.Node.text
-                [%string
-                  "%{text_or_dash (Labeller.Capture_metadata.recorded_at capture)} · %{sample_text capture}"]
-            ]
+            [ Vdom.Node.text (status_detail_text capture) ]
         ]
     ; Vdom.Node.div
         ~attrs:[ style "display:flex;gap:6px;justify-content:flex-end;" ]
-        [ status_pill ~active:(Labeller.Capture_metadata.labels_present capture) "labels"
-        ; status_pill ~active:(Labeller.Capture_metadata.analysis_present capture) "analysis"
-        ]
+        [ status_badge (Labeller.Capture_metadata.operational_status capture) ]
     ]
 ;;
 
@@ -233,19 +272,20 @@ let workspace_preview selected_capture =
                [ Vdom.Node.text (text_or_dash (Labeller.Capture_metadata.session_name capture)) ]
            ; Vdom.Node.div
                ~attrs:[ style "margin:18px 0 20px;" ]
-               [ metadata_row "Recorded" (text_or_dash (Labeller.Capture_metadata.recorded_at capture))
-               ; metadata_row "Segments" (segment_text capture)
-               ; metadata_row "Samples" (sample_text capture)
-               ; metadata_row "Model" (text_or_dash (Labeller.Capture_metadata.model_name capture))
+               [ metadata_row
+                   "State"
+                   (status_label (Labeller.Capture_metadata.operational_status capture))
+               ; metadata_row "Trace" (trace_summary capture)
                ; metadata_row
-                   "Version"
-                   (text_or_dash (Labeller.Capture_metadata.model_version capture))
+                   "Labels"
+                   (if Labeller.Capture_metadata.labels_present capture then "Present" else "Missing")
+               ; metadata_row
+                   "Analysis"
+                   (if Labeller.Capture_metadata.analysis_present capture then "Present" else "Missing")
                ]
            ; Vdom.Node.p
-               ~attrs:[ style "margin:0;color:#7b756b;font-size:13px;line-height:1.6;" ]
-               [ Vdom.Node.text
-                   "Next: load the selected trace into the replay canvas and expose interval labelling controls."
-               ]
+               ~attrs:[ style "margin:0;color:#3a3731;font-size:14px;line-height:1.6;font-weight:520;" ]
+               [ Vdom.Node.text (next_action_text capture) ]
            ])
     ]
 ;;
