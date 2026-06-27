@@ -73,6 +73,12 @@ module Capture_metadata = struct
     | No_trace_data
   [@@deriving compare, equal, sexp]
 
+  type operational_group =
+    | Needs_attention
+    | Ready
+    | Blocked
+  [@@deriving compare, equal, sexp]
+
   type t =
     { id : Capture_id.t
     ; recorded_at : string option
@@ -117,6 +123,25 @@ module Capture_metadata = struct
     else if not t.labels_present
     then Needs_labels
     else Ready_to_review
+  ;;
+
+  let operational_rank t =
+    match operational_status t with
+    | Needs_labels -> 0
+    | Analysis_missing -> 1
+    | Ready_to_review -> 2
+    | No_trace_data -> 3
+  ;;
+
+  let compare_operational_priority left right =
+    Int.compare (operational_rank left) (operational_rank right)
+  ;;
+
+  let operational_group t =
+    match operational_status t with
+    | Needs_labels | Analysis_missing -> Needs_attention
+    | Ready_to_review -> Ready
+    | No_trace_data -> Blocked
   ;;
 end
 

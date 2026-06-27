@@ -65,6 +65,12 @@ module Capture_metadata : sig
     | No_trace_data
   [@@deriving compare, equal, sexp]
 
+  type operational_group =
+    | Needs_attention
+    | Ready
+    | Blocked
+  [@@deriving compare, equal, sexp]
+
   type t [@@deriving compare, equal, sexp]
 
   val id : t -> Capture_id.t
@@ -77,6 +83,8 @@ module Capture_metadata : sig
   val labels_present : t -> bool
   val analysis_present : t -> bool
   val operational_status : t -> operational_status
+  val operational_group : t -> operational_group
+  val compare_operational_priority : t -> t -> int
 end
 
 module Bundle_manifest : sig

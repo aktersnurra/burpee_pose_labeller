@@ -194,6 +194,66 @@ let capture_row ~selected_capture ~inject_action capture =
     ]
 ;;
 
+let section_title = function
+  | Labeller.Capture_metadata.Needs_attention -> "Needs attention"
+  | Ready -> "Ready"
+  | Blocked -> "Blocked"
+;;
+
+let section_hint = function
+  | Labeller.Capture_metadata.Needs_attention -> "Captures with missing labels or analysis."
+  | Ready -> "Captures with trace, analysis, and labels available."
+  | Blocked -> "Captures that cannot be labelled until trace data is restored."
+;;
+
+let capture_section ~selected_capture ~inject_action group captures =
+  match captures with
+  | [] -> None
+  | captures ->
+    Some
+      (Vdom.Node.section
+         ~attrs:[ style "padding-top:16px;border-top:1px solid #ece9e2;" ]
+         [ Vdom.Node.div
+             ~attrs:
+               [ style
+                   "display:flex;align-items:baseline;justify-content:space-between;margin-bottom:2px;"
+               ]
+             [ Vdom.Node.h3
+                 ~attrs:
+                   [ style
+                       "font-size:12px;line-height:1.2;margin:0;color:#3a3731;font-weight:620;text-transform:uppercase;letter-spacing:0.04em;"
+                   ]
+                 [ Vdom.Node.text (section_title group) ]
+             ; Vdom.Node.div
+                 ~attrs:[ style "font-size:12px;color:#6f6a60;" ]
+                 [ let count = List.length captures in
+                   let suffix = if count = 1 then "" else "s" in
+                   Vdom.Node.text [%string "%{count#Int} capture%{suffix}"]
+                 ]
+             ]
+         ; Vdom.Node.div
+             ~attrs:[ style "font-size:12px;color:#6f6a60;margin-bottom:6px;" ]
+             [ Vdom.Node.text (section_hint group) ]
+         ; Vdom.Node.div
+             (List.map captures ~f:(capture_row ~selected_capture ~inject_action))
+         ])
+;;
+
+let grouped_capture_sections ~selected_capture ~inject_action captures =
+  let sorted =
+    List.sort captures ~compare:Labeller.Capture_metadata.compare_operational_priority
+  in
+  [ Labeller.Capture_metadata.Needs_attention; Ready; Blocked ]
+  |> List.filter_map ~f:(fun group ->
+    let captures =
+      List.filter sorted ~f:(fun capture ->
+        Labeller.Capture_metadata.equal_operational_group
+          (Labeller.Capture_metadata.operational_group capture)
+          group)
+    in
+    capture_section ~selected_capture ~inject_action group captures)
+;;
+
 let capture_index ~selected_capture ~inject_action captures =
   Vdom.Node.section
     ~attrs:
@@ -226,7 +286,9 @@ let capture_index ~selected_capture ~inject_action captures =
              ]
            [ Vdom.Node.text "Open a bundle to see captured pose traces here." ]
        | captures ->
-         Vdom.Node.div (List.map captures ~f:(capture_row ~selected_capture ~inject_action)))
+         Vdom.Node.div
+           ~attrs:[ style "display:flex;flex-direction:column;gap:14px;" ]
+           (grouped_capture_sections ~selected_capture ~inject_action captures))
     ]
 ;;
 
